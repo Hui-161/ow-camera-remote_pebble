@@ -21,7 +21,7 @@ AppSettings* app_get_settings() {
 static void detect_watch_model() {
   g_app_settings.screen_width = PBL_DISPLAY_WIDTH;
   g_app_settings.screen_height = PBL_DISPLAY_HEIGHT;
-  # TODO: fix action bar width handling - should be based on platform, not hardcoded
+  // TODO: fix action bar width handling - should be based on platform, not hardcoded
   g_app_settings.action_bar_width = PBL_IF_RECT_ELSE(30, 28);
 
 #ifdef PBL_PLATFORM_APLITE
