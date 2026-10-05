@@ -63,6 +63,10 @@ To debug logs from the watch, use:
 pebble logs --cloudpebble
 ```
 
+### Don't build with CloudPebble
+
+CloudPebble writes its own `package.json` from the project settings it stores (`generate_v3_manifest_dict` in `cloudpebble/ide/utils/sdk/manifest.py`) and has no field for `companionApp`. A `.pbw` built there therefore lacks the companion package list. The Core Devices app then falls back to the classic PebbleKit broadcasts, which the companion app doesn't answer: every message from the watch ends in `APP_MSG_SEND_TIMEOUT`, captures do nothing and the preview never starts - with no error shown in the phone app. Build with `pebble build` and check that `appinfo.json` inside the `.pbw` contains `companionApp`.
+
 ### Testing previews in the emulator
 
 `tools/fake_phone.py` stands in for the companion app: it answers the watch's frame and chunk requests with test frames packed the same way the Android app packs them. It runs with the interpreter that ships with `pebble-tool` (it needs libpebble2 and Pillow):
