@@ -194,10 +194,17 @@ static void preview_data_callback(uint8_t *data, size_t length) {
       // Continuation message - extract is_last_chunk from bit 6
       bool is_last_chunk = (header_byte >> 6) & 0x01;
 
-      if (!is_last_chunk) {
-        // More chunks coming - request next chunk immediately
-        uint8_t chunk_number = (header_byte >> 3) & 0x07;
-        uint8_t next_chunk = chunk_number + 1;
+      uint8_t chunk_number = (header_byte >> 3) & 0x07;
+      // Only pull ahead for the chunk the assembler expects. A duplicate or
+      // stray continuation would otherwise trigger another request and keep
+      // the phone and watch ping-ponging the same message indefinitely.
+      if (!is_last_chunk && message_assembler_is_expected_chunk(chunk_number)) {
+        // The phone indexes chunk requests by message position: message 0 is
+        // the first message, continuation N is message N + 1, so the message
+        // after continuation N is N + 2. Requesting N + 1 re-fetched the
+        // continuation just received, which broke every frame of three or
+        // more messages - only emery's 4-bit frames get that large.
+        uint8_t next_chunk = chunk_number + 2;
         FrameFormat format = frame_buffer_manager_get_format();
         send_request_next_chunk(next_chunk, format);
       }

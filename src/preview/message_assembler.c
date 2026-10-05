@@ -72,6 +72,10 @@ void message_assembler_reset(void) {
   memset(s_state.palette, 0, sizeof(s_state.palette));
 }
 
+bool message_assembler_is_expected_chunk(uint8_t chunk_number) {
+  return s_state.is_assembling && chunk_number == s_state.expected_chunk;
+}
+
 void message_assembler_register_timeout_callback(AssemblerTimeoutCallback callback) {
   s_timeout_callback = callback;
 }

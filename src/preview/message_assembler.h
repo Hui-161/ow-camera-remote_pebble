@@ -26,6 +26,11 @@ void message_assembler_deinit(void);
 // Reset assembler state (e.g., on timeout or error)
 void message_assembler_reset(void);
 
+// True if a multi-message frame is being assembled and chunk_number is the
+// continuation it expects next. Lets callers pull the next chunk early without
+// re-requesting chunks the assembler would reject.
+bool message_assembler_is_expected_chunk(uint8_t chunk_number);
+
 // Process a message (first or continuation)
 // Returns true if message was processed successfully
 // For single-message or final multi-message chunk: invokes callback
