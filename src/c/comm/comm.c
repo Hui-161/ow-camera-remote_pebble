@@ -1,5 +1,5 @@
 #include <pebble.h>
-#include "comm/comm.h"
+#include "comm.h"
 #include "../app_settings.h"
 #include <time.h>
 
