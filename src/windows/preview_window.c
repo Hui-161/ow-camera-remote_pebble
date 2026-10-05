@@ -42,6 +42,11 @@ static char s_countdown_text[16];
 // Picture taken protection
 static bool s_expecting_picture_taken = false;
 
+// Short-lived notice over the preview, e.g. when the phone doesn't answer a capture
+static TextLayer *s_status_layer;
+static AppTimer *s_status_timer = NULL;
+#define STATUS_DISPLAY_MS 4000
+
 // External color globals
 extern GColor TEXT_COLOR;
 
@@ -350,6 +355,23 @@ static void start_countdown_overlay(uint16_t seconds) {
   s_countdown_timer = app_timer_register(1000, countdown_tick_handler, NULL);
 }
 
+static void status_hide_handler(void *data) {
+  s_status_timer = NULL;
+  layer_set_hidden(text_layer_get_layer(s_status_layer), true);
+}
+
+static void show_status(const char *text) {
+  if (!s_status_layer) {
+    return;
+  }
+  text_layer_set_text(s_status_layer, text);
+  layer_set_hidden(text_layer_get_layer(s_status_layer), false);
+  if (s_status_timer) {
+    app_timer_cancel(s_status_timer);
+  }
+  s_status_timer = app_timer_register(STATUS_DISPLAY_MS, status_hide_handler, NULL);
+}
+
 static void capture_send_result_callback(bool success) {
   if (success) {
     APP_LOG(APP_LOG_LEVEL_INFO, "capture_send_result_callback: Companion app acknowledged capture command");
@@ -361,8 +383,13 @@ static void capture_send_result_callback(bool success) {
     if (timer_seconds > 0) {
       start_countdown_overlay(timer_seconds);
     }
+    return;
   }
-  // Silently ignore timeout - no feedback if companion app doesn't acknowledge
+  // The phone only acknowledges while the camera app is in the foreground - it drops captures
+  // when the app is in the background or the screen is off. Without feedback a press looked
+  // like it worked, and the missing photo was only noticed later on the phone.
+  show_status("No reply.\nCamera app open on phone?");
+  vibes_long_pulse();
 }
 
 static void start_camera_countdown() {
@@ -495,6 +522,19 @@ static void preview_window_load(Window *window) {
   layer_set_frame(text_layer_get_layer(s_countdown_layer), countdown_bounds);
   layer_add_child(window_layer, text_layer_get_layer(s_countdown_layer));
 
+  GRect status_bounds = canvas_bounds;
+  status_bounds.origin.x = PBL_IF_ROUND_ELSE(15, 0);
+  status_bounds.size.w = canvas_bounds.size.w - PBL_IF_ROUND_ELSE(30, 0);
+  status_bounds.size.h = 76;
+  status_bounds.origin.y = (canvas_bounds.size.h - status_bounds.size.h) / 2;
+  s_status_layer = text_layer_create(status_bounds);
+  text_layer_set_background_color(s_status_layer, GColorBlack);
+  text_layer_set_text_color(s_status_layer, GColorWhite);
+  text_layer_set_font(s_status_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
+  text_layer_set_text_alignment(s_status_layer, GTextAlignmentCenter);
+  layer_set_hidden(text_layer_get_layer(s_status_layer), true);
+  layer_add_child(window_layer, text_layer_get_layer(s_status_layer));
+
   // Use preallocated frame buffer from manager
   s_frame_buffer = frame_buffer_manager_get_buffer();
 
@@ -604,6 +644,14 @@ static void preview_window_unload(Window *window) {
   if (s_countdown_layer) {
     text_layer_destroy(s_countdown_layer);
     s_countdown_layer = NULL;
+  }
+  if (s_status_timer) {
+    app_timer_cancel(s_status_timer);
+    s_status_timer = NULL;
+  }
+  if (s_status_layer) {
+    text_layer_destroy(s_status_layer);
+    s_status_layer = NULL;
   }
   if (s_action_bar) {
     action_bar_layer_destroy(s_action_bar);
