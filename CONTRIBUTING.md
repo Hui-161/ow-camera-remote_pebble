@@ -63,6 +63,18 @@ To debug logs from the watch, use:
 pebble logs --cloudpebble
 ```
 
+### Testing previews in the emulator
+
+`tools/fake_phone.py` stands in for the companion app: it answers the watch's frame and chunk requests with test frames packed the same way the Android app packs them. It runs with the interpreter that ships with `pebble-tool` (it needs libpebble2 and Pillow):
+
+```bash
+pebble install --emulator emery
+~/.local/share/uv/tools/pebble-tool/bin/python tools/fake_phone.py emery --noise 80
+pebble screenshot --emulator emery preview.png
+```
+
+`--noise` adds grain that compresses badly, like a real dithered camera frame. Use it to get multi-message color frames: on emery, `--noise 80` produces three messages per frame. If you change the wire format on either side, update the script to match the Android code.
+
 ## Submitting Changes
 
 1. **Create a branch** from `master` for your work
