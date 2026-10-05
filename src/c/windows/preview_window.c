@@ -388,7 +388,15 @@ static void capture_send_result_callback(bool success) {
   // The phone only acknowledges while the camera app is in the foreground - it drops captures
   // when the app is in the background or the screen is off. Without feedback a press looked
   // like it worked, and the missing photo was only noticed later on the phone.
-  show_status("No reply.\nCamera app open on phone?");
+  AppMessageResult error = comm_last_error();
+  if (error == APP_MSG_OK) {
+    show_status("No reply.\nCamera app open on phone?");
+  } else {
+    // the watch couldn't even send - name the reason, the phone app is not the problem then
+    static char s_capture_error_text[48];
+    snprintf(s_capture_error_text, sizeof(s_capture_error_text), "Can't reach phone\n(%s)", comm_error_name(error));
+    show_status(s_capture_error_text);
+  }
   vibes_long_pulse();
 }
 
@@ -403,6 +411,26 @@ static void start_camera_countdown() {
 }
 
 /********************************* Canvas Layer ************************************/
+
+// One line under "App open?" that says where the chain breaks: a watch that can't send at
+// all, or a phone that receives the requests but sends no image (app in the background,
+// old camera API, ...). Both looked the same before.
+static void draw_link_diagnosis(GContext *ctx, GRect text_bounds) {
+  static char s_diagnosis[40];
+  AppMessageResult error = comm_last_error();
+  if (error != APP_MSG_OK) {
+    snprintf(s_diagnosis, sizeof(s_diagnosis), "Watch: %s", comm_error_name(error));
+  } else if (comm_phone_reached()) {
+    snprintf(s_diagnosis, sizeof(s_diagnosis), "Phone reached, no image");
+  } else {
+    snprintf(s_diagnosis, sizeof(s_diagnosis), "No answer from phone");
+  }
+  GRect line = text_bounds;
+  line.origin.y += text_bounds.size.h - 4;
+  line.size.h = 36;
+  graphics_draw_text(ctx, s_diagnosis, fonts_get_system_font(FONT_KEY_GOTHIC_14),
+                     line, GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
+}
 
 static void canvas_update_proc(Layer *this_layer, GContext *ctx) {
   GRect bounds = layer_get_bounds(this_layer);
@@ -462,6 +490,7 @@ static void canvas_update_proc(Layer *this_layer, GContext *ctx) {
       // Show message asking if app is open on phone
       graphics_draw_text(ctx, "Waiting...\nApp open?", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
                          text_bounds, GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
+      draw_link_diagnosis(ctx, text_bounds);
     } else {
       graphics_draw_text(ctx, "Waiting for preview...", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
                          text_bounds, GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Show on the waiting screen where the connection breaks: an AppMessage error on the watch, or "Phone reached, no image" when the phone acknowledges requests but sends no frames. The capture notice names the error when the watch couldn't send at all.
 - Show a notice and vibrate when the phone doesn't acknowledge a capture. The companion app ignores captures while it isn't open in the foreground, so a press used to look successful while no photo was taken.
 
 ### Changed

@@ -16,6 +16,16 @@ static AppTimer *capture_ack_timeout_timer = NULL;
 static bool s_capture_in_progress = false;
 static bool s_outbox_pending = false;
 
+// Last AppMessage failure and whether the phone ever acknowledged a message. Shown on the
+// waiting screen: "App open?" alone can't tell a watch that can't send apart from a phone
+// that gets the requests but sends no image.
+static AppMessageResult s_last_error = APP_MSG_OK;
+static bool s_phone_reached = false;
+
+// A capture queued behind a busy outbox gives up after this long instead of waiting silently
+#define PENDING_CAPTURE_TIMEOUT_MS 3000
+static AppTimer *s_pending_capture_timer = NULL;
+
 // Pending capture state: when outbox is busy, we store the capture args here
 // and send them when the outbox clears
 typedef struct {
@@ -32,6 +42,24 @@ static void clear_capture_in_progress(void) {
   s_capture_in_progress = false;
   s_pending_capture.pending = false;
   s_pending_capture.timer_seconds = 0;
+  if (s_pending_capture_timer) {
+    app_timer_cancel(s_pending_capture_timer);
+    s_pending_capture_timer = NULL;
+  }
+}
+
+static void prv_fail_capture(void) {
+  if (pending_capture_ack_callback) {
+    pending_capture_ack_callback(false);
+    pending_capture_ack_callback = NULL;
+  }
+  clear_capture_in_progress();
+}
+
+static void pending_capture_timeout_handler(void *data) {
+  s_pending_capture_timer = NULL;
+  APP_LOG(APP_LOG_LEVEL_WARNING, "pending_capture_timeout_handler: outbox never cleared, giving up on capture");
+  prv_fail_capture();
 }
 
 static void capture_ack_timeout_handler(void *data) {
@@ -45,6 +73,12 @@ static void capture_ack_timeout_handler(void *data) {
   }
 
   clear_capture_in_progress();
+}
+
+static char *translate_error(AppMessageResult result);
+
+static void prv_record_error(AppMessageResult result) {
+  s_last_error = result;
 }
 
 static char *translate_error(AppMessageResult result) {
@@ -128,11 +162,22 @@ static void prv_send_capture_internal(int timer_seconds) {
   DictionaryIterator *iter;
   AppMessageResult begin_result = app_message_outbox_begin(&iter);
 
-  if (begin_result != APP_MSG_OK) {
-    APP_LOG(APP_LOG_LEVEL_WARNING, "prv_send_capture_internal: app_message_outbox_begin failed (outbox busy): %s", translate_error(begin_result));
+  if (begin_result == APP_MSG_BUSY) {
+    APP_LOG(APP_LOG_LEVEL_WARNING, "prv_send_capture_internal: outbox busy, capture pending");
     // Store as pending - will be retried when outbox clears
     s_pending_capture.pending = true;
     s_pending_capture.timer_seconds = timer_seconds;
+    if (!s_pending_capture_timer) {
+      s_pending_capture_timer = app_timer_register(PENDING_CAPTURE_TIMEOUT_MS, pending_capture_timeout_handler, NULL);
+    }
+    return;
+  }
+  if (begin_result != APP_MSG_OK) {
+    // Anything but busy won't clear by waiting. Queuing the capture used to swallow the
+    // press without any feedback.
+    APP_LOG(APP_LOG_LEVEL_ERROR, "prv_send_capture_internal: app_message_outbox_begin failed: %s", translate_error(begin_result));
+    prv_record_error(begin_result);
+    prv_fail_capture();
     return;
   }
 
@@ -159,13 +204,14 @@ static void prv_send_capture_internal(int timer_seconds) {
     // Set timeout to wait for ACK - using 2 second timeout since companion app should respond immediately
     capture_ack_timeout_timer = app_timer_register(2000, capture_ack_timeout_handler, NULL);
     s_pending_capture.pending = false;
+    if (s_pending_capture_timer) {
+      app_timer_cancel(s_pending_capture_timer);
+      s_pending_capture_timer = NULL;
+    }
   } else {
     APP_LOG(APP_LOG_LEVEL_WARNING, "prv_send_capture_internal: Failed to queue message in outbox: %s", translate_error(send_result_code));
-    if (pending_capture_ack_callback) {
-      pending_capture_ack_callback(false);
-      pending_capture_ack_callback = NULL;
-    }
-    clear_capture_in_progress();
+    prv_record_error(send_result_code);
+    prv_fail_capture();
   }
 }
 
@@ -219,6 +265,9 @@ void send_request_next_frame(uint8_t model_enum, uint8_t format, uint8_t ditheri
 
   if (begin_result != APP_MSG_OK) {
     APP_LOG(APP_LOG_LEVEL_ERROR, "send_request_next_frame: app_message_outbox_begin failed: %s", translate_error(begin_result));
+    if (begin_result != APP_MSG_BUSY) {
+      prv_record_error(begin_result);
+    }
     return;
   }
 
@@ -243,6 +292,7 @@ void send_request_next_frame(uint8_t model_enum, uint8_t format, uint8_t ditheri
     s_outbox_pending = true;
   } else {
     APP_LOG(APP_LOG_LEVEL_ERROR, "send_request_next_frame: outbox_send failed: %s", translate_error(send_result_code));
+    prv_record_error(send_result_code);
   }
 }
 
@@ -252,6 +302,9 @@ void send_request_next_chunk(uint8_t chunk_number, uint8_t format) {
 
   if (begin_result != APP_MSG_OK) {
     APP_LOG(APP_LOG_LEVEL_ERROR, "send_request_next_chunk: app_message_outbox_begin failed: %s", translate_error(begin_result));
+    if (begin_result != APP_MSG_BUSY) {
+      prv_record_error(begin_result);
+    }
     return;
   }
 
@@ -275,6 +328,7 @@ void send_request_next_chunk(uint8_t chunk_number, uint8_t format) {
     s_outbox_pending = true;
   } else {
     APP_LOG(APP_LOG_LEVEL_ERROR, "Failed to request next chunk: %s", translate_error(send_result_code));
+    prv_record_error(send_result_code);
   }
 }
 
@@ -283,6 +337,9 @@ static void inbox_received_callback(DictionaryIterator *iterator, void *context)
     APP_LOG(APP_LOG_LEVEL_ERROR, "inbox_received_callback: iterator is NULL");
     return;
   }
+
+  s_phone_reached = true;
+  s_last_error = APP_MSG_OK;
 
   Tuple *t = dict_read_first(iterator);
 
@@ -369,11 +426,13 @@ static void inbox_received_callback(DictionaryIterator *iterator, void *context)
 
 static void inbox_dropped_handler(AppMessageResult reason, void *context) {
   APP_LOG(APP_LOG_LEVEL_ERROR, "inbox_dropped_handler: Inbox message dropped with error: %s (code: %d)", translate_error(reason), reason);
+  prv_record_error(reason);
 }
 
 static void outbox_failed_handler(DictionaryIterator *iterator, AppMessageResult reason, void *context) {
   s_outbox_pending = false;
   APP_LOG(APP_LOG_LEVEL_ERROR, "outbox_failed_handler: Outbox send failed with error: %s (code: %d)", translate_error(reason), reason);
+  prv_record_error(reason);
 
   // If there's a pending result callback, call it with false to signal failure
   if (pending_send_result_callback) {
@@ -390,6 +449,8 @@ static void outbox_failed_handler(DictionaryIterator *iterator, AppMessageResult
 
 static void outbox_sent_handler(DictionaryIterator *iterator, void *context) {
   s_outbox_pending = false;
+  s_phone_reached = true;
+  s_last_error = APP_MSG_OK;
   if (response_wait_timer) {
     app_timer_cancel(response_wait_timer);
     response_wait_timer = NULL;
@@ -416,14 +477,42 @@ void init_comm() {
 
   // Calculate inbox size based on device type
   // For b/w devices: size is based on actual image data (1bit per pixel)
-  // For color devices: use maximum 8KB
+  // For color devices: the phone fills messages up to 8192 bytes of payload, which needs a
+  // few bytes more for the dictionary header - so take the maximum rather than exactly 8192
+  uint32_t inbox_max = app_message_inbox_size_maximum();
   uint32_t inbox_size = PBL_IF_COLOR_ELSE(
-    8192,
+    inbox_max,
     ((PBL_DISPLAY_WIDTH * PBL_DISPLAY_HEIGHT) / 8) + 256
   );
+  if (inbox_size > inbox_max) {
+    inbox_size = inbox_max;
+  }
   uint32_t outbox_size = 52;
 
-  app_message_open(inbox_size, outbox_size);
+  AppMessageResult result = app_message_open(inbox_size, outbox_size);
+  APP_LOG(APP_LOG_LEVEL_INFO, "init_comm: app_message_open(%lu, %lu) -> %s (inbox max %lu)",
+          (unsigned long)inbox_size, (unsigned long)outbox_size, translate_error(result), (unsigned long)inbox_max);
+  if (result != APP_MSG_OK) {
+    // Without an open outbox every send fails at app_message_outbox_begin(). A small inbox
+    // can't take preview frames, but still lets captures and their acknowledgements through.
+    prv_record_error(result);
+    result = app_message_open(1024, outbox_size);
+    APP_LOG(APP_LOG_LEVEL_WARNING, "init_comm: retry with small inbox -> %s", translate_error(result));
+  }
+}
+
+AppMessageResult comm_last_error(void) {
+  return s_last_error;
+}
+
+const char *comm_error_name(AppMessageResult result) {
+  // drop the "APP_MSG_" prefix, the screen is narrow
+  const char *name = translate_error(result);
+  return strncmp(name, "APP_MSG_", 8) == 0 ? name + 8 : name;
+}
+
+bool comm_phone_reached(void) {
+  return s_phone_reached;
 }
 
 void deinit_comm() {

@@ -1,3 +1,6 @@
+#pragma once
+#include <pebble.h>
+
 #define KEY_CAPTURE 1
 #define KEY_PICTURE_TAKEN 2
 #define KEY_PREVIEW_DATA 3
@@ -29,3 +32,8 @@ void register_preview_data_callback(PreviewDataCallback *callback);
 uint8_t model_name_to_enum(const char *model_name);
 void init_comm();
 void deinit_comm();
+
+// Diagnostics for the waiting screen and the capture notice
+AppMessageResult comm_last_error(void);
+const char *comm_error_name(AppMessageResult result);
+bool comm_phone_reached(void);
